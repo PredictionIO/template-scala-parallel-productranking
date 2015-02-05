@@ -2,8 +2,6 @@ package org.template.productranking
 
 import io.prediction.controller.P2LAlgorithm
 import io.prediction.controller.Params
-import io.prediction.controller.IPersistentModel
-import io.prediction.controller.IPersistentModelLoader
 import io.prediction.data.storage.BiMap
 
 import org.apache.spark.SparkContext
