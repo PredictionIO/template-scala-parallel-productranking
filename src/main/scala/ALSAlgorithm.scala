@@ -1,6 +1,6 @@
 package org.template.productranking
 
-import io.prediction.controller.PAlgorithm
+import io.prediction.controller.P2LAlgorithm
 import io.prediction.controller.Params
 import io.prediction.controller.IPersistentModel
 import io.prediction.controller.IPersistentModelLoader
@@ -8,7 +8,6 @@ import io.prediction.data.storage.BiMap
 
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
-import org.apache.spark.rdd.RDD
 import org.apache.spark.mllib.recommendation.ALS
 import org.apache.spark.mllib.recommendation.{Rating => MLlibRating}
 
@@ -24,32 +23,19 @@ case class ALSAlgorithmParams(
 
 class ALSModel(
   val rank: Int,
-  val userFeatures: RDD[(Int, Array[Double])],
-  val productFeatures: RDD[(Int, Array[Double])],
+  val userFeatures: Map[Int, Array[Double]],
+  val productFeatures: Map[Int, Array[Double]],
   val userStringIntMap: BiMap[String, Int],
   val itemStringIntMap: BiMap[String, Int]
-) extends IPersistentModel[ALSAlgorithmParams] with Serializable {
+) extends Serializable {
 
   @transient lazy val itemIntStringMap = itemStringIntMap.inverse
 
-  def save(id: String, params: ALSAlgorithmParams,
-    sc: SparkContext): Boolean = {
-
-    sc.parallelize(Seq(rank)).saveAsObjectFile(s"/tmp/${id}/rank")
-    userFeatures.saveAsObjectFile(s"/tmp/${id}/userFeatures")
-    productFeatures.saveAsObjectFile(s"/tmp/${id}/productFeatures")
-    sc.parallelize(Seq(userStringIntMap))
-      .saveAsObjectFile(s"/tmp/${id}/userStringIntMap")
-    sc.parallelize(Seq(itemStringIntMap))
-      .saveAsObjectFile(s"/tmp/${id}/itemStringIntMap")
-    true
-  }
-
   override def toString = {
     s" rank: ${rank}" +
-    s" userFeatures: [${userFeatures.count()}]" +
+    s" userFeatures: [${userFeatures.size}]" +
     s"(${userFeatures.take(2).toList}...)" +
-    s" productFeatures: [${productFeatures.count()}]" +
+    s" productFeatures: [${productFeatures.size}]" +
     s"(${productFeatures.take(2).toList}...)" +
     s" userStringIntMap: [${userStringIntMap.size}]" +
     s"(${userStringIntMap.take(2).toString}...)]" +
@@ -58,28 +44,8 @@ class ALSModel(
   }
 }
 
-object ALSModel
-  extends IPersistentModelLoader[ALSAlgorithmParams, ALSModel] {
-  def apply(id: String, params: ALSAlgorithmParams,
-    sc: Option[SparkContext]) = {
-    new ALSModel(
-      rank = sc.get
-        .objectFile[Int](s"/tmp/${id}/rank").first,
-      userFeatures = sc.get
-        .objectFile(s"/tmp/${id}/userFeatures")
-        .cache(), // persist to memory for fast multiple accesses
-      productFeatures = sc.get
-        .objectFile(s"/tmp/${id}/productFeatures")
-        .cache(), // persist to memory for fast multiple accesses
-      userStringIntMap = sc.get
-        .objectFile[BiMap[String, Int]](s"/tmp/${id}/userStringIntMap").first,
-      itemStringIntMap = sc.get
-        .objectFile[BiMap[String, Int]](s"/tmp/${id}/itemStringIntMap").first)
-  }
-}
-
 class ALSAlgorithm(val ap: ALSAlgorithmParams)
-  extends PAlgorithm[PreparedData, ALSModel, Query, PredictedResult] {
+  extends P2LAlgorithm[PreparedData, ALSModel, Query, PredictedResult] {
 
   @transient lazy val logger = Logger[this.type]
 
@@ -143,8 +109,8 @@ class ALSAlgorithm(val ap: ALSAlgorithmParams)
 
     new ALSModel(
       rank = m.rank,
-      userFeatures = m.userFeatures,
-      productFeatures = m.productFeatures,
+      userFeatures = m.userFeatures.collectAsMap.toMap,
+      productFeatures = m.productFeatures.collectAsMap.toMap,
       userStringIntMap = userStringIntMap,
       itemStringIntMap = itemStringIntMap
     )
@@ -155,29 +121,25 @@ class ALSAlgorithm(val ap: ALSAlgorithmParams)
     val itemStringIntMap = model.itemStringIntMap
     val productFeatures = model.productFeatures
 
-    val itemFeatures: ParVector[Option[Array[Double]]] = query.items
-      .toVector.par // convert to parallel collection for parallel lookup
-      .map { iid =>
-        // convert query item id to index
-        val featureOpt: Option[Array[Double]] = itemStringIntMap.get(iid)
-          // user headOption because productFeatures may not contain the item
-          .map (index => productFeatures.lookup(index).headOption)
-          .flatten
-
-        featureOpt
-      }
-
     // default itemScores array if items are not ranked at all
     lazy val notRankedItemScores =
       query.items.map(i => ItemScore(i, 0)).toArray
 
     model.userStringIntMap.get(query.user).map { userIndex =>
       // lookup userFeature for the user
-      model.userFeatures.lookup(userIndex).headOption
-    }.flatten // flatten Option[Option[Array[Double]]] => Option[Array[Double]]
+      model.userFeatures.get(userIndex)
+    }.flatten // flatten Option[Option[Array[Double]]] to Option[Array[Double]]
     .map { userFeature =>
-      val scores: Vector[Option[Double]] = itemFeatures
-        .map { featureOpt =>
+      val scores: Vector[Option[Double]] = query.items.toVector
+        .par // convert to parallel collection for parallel lookup
+        .map { iid =>
+          // convert query item id to index
+          val featureOpt: Option[Array[Double]] = itemStringIntMap.get(iid)
+            // productFeatures may not contain the item
+            .map (index => productFeatures.get(index))
+            // flatten Option[Option[Array[Double]]] to Option[Array[Double]]
+            .flatten
+
           featureOpt.map(f => dotProduct(f, userFeature))
         }.seq // convert back to sequential collection
 
