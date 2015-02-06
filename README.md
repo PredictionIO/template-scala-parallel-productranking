@@ -1,11 +1,26 @@
-# Product Ranking Template
+# Product Ranking Engine Template
+
+## Documentation
+
+Please refer to http://docs.prediction.io/templates/productranking/quickstart/
+
+## Version
+
+### develop
+
+-
+
+### v0.1.0
+
+- initial version
+
 
 ## Development Notes
 
 ### import sample data
 
 ```
-$ python data/import_eventserver.py --access_key
+$ python data/import_eventserver.py --access_key <your access key>
 ```
 
 ### query
