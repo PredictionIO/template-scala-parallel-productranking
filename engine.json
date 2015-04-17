@@ -4,7 +4,7 @@
   "engineFactory": "org.template.productranking.ProductRankingEngine",
   "datasource": {
     "params" : {
-      "appId": 13
+      "appName": "INVALID_APP_NAME"
     }
   },
   "algorithms": [
