@@ -2,7 +2,7 @@
 
 ## Documentation
 
-Please refer to http://docs.prediction.io/templates/productranking/quickstart/
+Please refer to http://predictionio.incubator.apache.org/templates/productranking/quickstart/
 
 ## Version
 
