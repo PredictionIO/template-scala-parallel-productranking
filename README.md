@@ -6,6 +6,9 @@ Please refer to http://predictionio.incubator.apache.org/templates/productrankin
 
 ## Version
 
+### v0.4.0
+- update for PredictionIO 0.13.0
+
 ### v0.3.0
 
 - update for PredictionIO 0.9.2, including:
