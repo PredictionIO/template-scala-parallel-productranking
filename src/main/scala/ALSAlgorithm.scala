@@ -153,12 +153,15 @@ class ALSAlgorithm(val ap: ALSAlgorithmParams)
       } else {
         // sort the score
         val ord = Ordering.by[ItemScore, Double](_.score).reverse
-        val sorted = query.items.zip(scores).map{ case (iid, scoreOpt) =>
-          ItemScore(
-            item = iid,
-            score = scoreOpt.getOrElse[Double](0)
-          )
-        }.sorted(ord).toArray
+        val sorted = scores.map{s =>
+            val score = s.getOrElse[Double](0)
+            if (score >= 0) score else 0d // zero out negative scores
+          }.zip(query.items).map{ case (s, iid) =>
+            ItemScore(
+              item = iid,
+              score = s
+            )
+          }.sorted(ord).toArray
 
         PredictedResult(
           itemScores = sorted,
