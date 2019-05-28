@@ -1,11 +1,12 @@
 package org.template.productranking
 
-import io.prediction.controller.P2LAlgorithm
-import io.prediction.controller.Params
-import io.prediction.data.storage.BiMap
+import org.apache.predictionio.controller.P2LAlgorithm
+import org.apache.predictionio.controller.Params
+import org.apache.predictionio.data.storage.BiMap
 
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
+import org.apache.spark.mllib.evaluation.RankingMetrics
 import org.apache.spark.mllib.recommendation.ALS
 import org.apache.spark.mllib.recommendation.{Rating => MLlibRating}
 
@@ -96,6 +97,12 @@ class ALSAlgorithm(val ap: ALSAlgorithmParams)
     // seed for MLlib ALS
     val seed = ap.seed.getOrElse(System.nanoTime)
 
+    logger.info(s"Training with parameters [rank: ${ap.rank}, " +
+      s"num iterations: ${ap.numIterations}, " +
+      s"lambda: ${ap.lambda}, " +
+      s"seed: ${seed}]\n" +
+      s"Event count: ${data.viewEvents.count}")
+
     val m = ALS.trainImplicit(
       ratings = mllibRatings,
       rank = ap.rank,
@@ -104,6 +111,47 @@ class ALSAlgorithm(val ap: ALSAlgorithmParams)
       blocks = -1,
       alpha = 1.0,
       seed = seed)
+
+    // Training-time evaluation using Spark RankingMetrics - sometimes we get a stack overflow
+
+    // Map ratings to 1 or 0, 1 indicating an item that should be recommended
+    val binarizedRatings = mllibRatings.map(r => MLlibRating(r.user, r.product,
+      if (r.rating > 2.5) 1.0 else 0.0)).cache()
+
+    // Define a function to scale ratings from 0 to 1
+    def scaledRating(r: MLlibRating): MLlibRating = {
+      val scaledRating = math.max(math.min(r.rating, 1.0), 0.0)
+      MLlibRating(r.user, r.product, scaledRating)
+    }
+
+    // Get sorted top ten predictions for each user and then scale from [0, 1]
+    val userRecommended = m.recommendProductsForUsers(10).map { case (user, recs) =>
+      (user, recs.map(scaledRating))
+    }
+
+    // Assume that any item a user clicked through to (which maps to a 1) is a relevant document
+    // Compare with top ten most relevant documents
+    val userItems = binarizedRatings.groupBy(_.user)
+    val relevantDocuments = userItems.join(userRecommended).map { case (user, (actual,
+      predictions)) =>
+        (predictions.map(_.product), actual.filter(_.rating > 0.0).map(_.product).toArray)
+    }
+    relevantDocuments.cache()
+
+    // Instantiate metrics object
+    val metrics = new RankingMetrics(relevantDocuments)
+
+    val metricResults : Map[String, Double] = Map(
+      "Precision at 1" -> metrics.precisionAt(1),
+      "Precision at 5" -> metrics.precisionAt(5),
+      "Precision at 10" -> metrics.precisionAt(10),
+      "MAP" -> metrics.meanAveragePrecision,
+      "NDCG at 1" -> metrics.ndcgAt(1),
+      "NDCG at 5" -> metrics.ndcgAt(5),
+      "NDCG at 10" -> metrics.ndcgAt(10)
+    )
+
+    logger.info(s"Training metrics ${metricResults}.")
 
     new ALSModel(
       rank = m.rank,
@@ -153,12 +201,15 @@ class ALSAlgorithm(val ap: ALSAlgorithmParams)
       } else {
         // sort the score
         val ord = Ordering.by[ItemScore, Double](_.score).reverse
-        val sorted = query.items.zip(scores).map{ case (iid, scoreOpt) =>
-          ItemScore(
-            item = iid,
-            score = scoreOpt.getOrElse[Double](0)
-          )
-        }.sorted(ord).toArray
+        val sorted = scores.map{s =>
+            val score = s.getOrElse[Double](0)
+            if (score >= 0) score else 0d // zero out negative scores
+          }.zip(query.items).map{ case (s, iid) =>
+            ItemScore(
+              item = iid,
+              score = s
+            )
+          }.sorted(ord).toArray
 
         PredictedResult(
           itemScores = sorted,
