@@ -1,5 +1,7 @@
 # Product Ranking Engine Template
 
+**September 2020: Archiving this repo as Apache PredictionIO is being moved to the attic.**
+
 ## Documentation
 
 Please refer to http://predictionio.incubator.apache.org/templates/productranking/quickstart/
